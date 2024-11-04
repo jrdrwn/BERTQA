@@ -2,6 +2,8 @@ package com.dicoding.bertqa.fragments
 
 import android.content.Context
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.text.Editable
 import android.text.TextWatcher
 import android.view.LayoutInflater
@@ -14,16 +16,20 @@ import androidx.fragment.app.Fragment
 import androidx.navigation.fragment.navArgs
 import androidx.recyclerview.widget.DividerItemDecoration
 import androidx.recyclerview.widget.LinearLayoutManager
+import com.dicoding.bertqa.BertQAHelper
 import com.dicoding.bertqa.DataSetClient
 import com.dicoding.bertqa.R
 import com.dicoding.bertqa.adapters.ChatHistoryAdapter
 import com.dicoding.bertqa.adapters.QuestionSuggestionsAdapter
 import com.dicoding.bertqa.databinding.FragmentQABinding
 import com.dicoding.bertqa.models.Message
+import org.tensorflow.lite.task.text.qa.QaAnswer
 
 class QAFragment : Fragment() {
 
     private lateinit var binding: FragmentQABinding
+
+    private lateinit var bertQAHelper: BertQAHelper
 
     private lateinit var chatAdapter: ChatHistoryAdapter
 
@@ -49,6 +55,7 @@ class QAFragment : Fragment() {
         val client = DataSetClient(requireActivity())
         client.loadJsonData()?.let {
             topicContent = it.getContents()[args.topicID]
+            topicSuggestedQuestions = it.questions[args.topicID]
         }
 
         initChatHistoryRecyclerView()
@@ -75,10 +82,17 @@ class QAFragment : Fragment() {
             if (it.isClickable && (binding.tietQuestion.text?.isNotEmpty() == true)) {
                 with(binding.tietQuestion) {
 
+                    binding.progressBar.visibility = View.VISIBLE
+
                     val question = this.text.toString()
                     this.text?.clear()
 
                     chatAdapter.addMessage(Message(question, true))
+
+                    Handler(Looper.getMainLooper()).post {
+                        bertQAHelper.getQuestionAnswer(topicContent, question)
+                        binding.progressBar.visibility = View.GONE
+                    }
 
                 }
             } else {
@@ -121,6 +135,7 @@ class QAFragment : Fragment() {
                     topicSuggestedQuestions,
                     object : QuestionSuggestionsAdapter.OnOptionClicked {
                         override fun onOptionClicked(optionID: Int) {
+                            setQuestion(optionID)
                         }
                     })
                 layoutManager =
@@ -134,6 +149,30 @@ class QAFragment : Fragment() {
     }
 
     private fun initBertQAModel() {
+        bertQAHelper = BertQAHelper(requireContext(), object : BertQAHelper.ResultAnswerListener {
+            override fun onError(error: String) {
+                Toast.makeText(requireContext(), error, Toast.LENGTH_SHORT).show()
+            }
+
+            override fun onResults(results: List<QaAnswer>?, inferenceTime: Long) {
+                results?.first()?.let {
+                    chatAdapter.addMessage(Message(it.text, false))
+                    binding.rvChatHistory.scrollToPosition(chatAdapter.itemCount - 1)
+                }
+
+                binding.tvInferenceTime.text = String.format(
+                    requireContext().getString(R.string.tv_inference_time_label),
+                    inferenceTime
+                )
+            }
+        })
+
+    }
+
+    private fun setQuestion(position: Int) {
+        binding.tietQuestion.setText(
+            topicSuggestedQuestions[position]
+        )
     }
 
     override fun onDestroyView() {
@@ -142,7 +181,7 @@ class QAFragment : Fragment() {
     }
 
     override fun onDestroy() {
-
+        bertQAHelper.clearBertQuestionAnswerer()
         super.onDestroy()
     }
 }
